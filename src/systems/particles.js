@@ -55,6 +55,24 @@ export class Particles {
     }
   }
 
+  spawnOilSplash(x, y, radius, count = 12) {
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (this.rng() - 0.5) * 0.5;
+      const speed = 20 + this.rng() * 40;
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed * 0.5; // Flatter trajectory
+      this.list.push({ 
+        type: 'oil', 
+        x, 
+        y, 
+        vx, 
+        vy, 
+        life: 0.8 + this.rng() * 0.6,
+        size: 1 + this.rng() * 2
+      });
+    }
+  }
+
   spawnMuzzle(x, y, dir, power = 1) {
     this.list.push({ type: 'muzzle', x, y, dir, life: 0.08, power: Math.max(1.0, power) });
   }
@@ -83,6 +101,11 @@ export class Particles {
         p.y += p.vy * dt;
         p.vy += 120 * dt;
         p.vx *= 0.95; p.vy *= 0.95;
+      } else if (p.type === 'oil') {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 80 * dt; // Gravity
+        p.vx *= 0.98; p.vy *= 0.98; // Slight air resistance
       }
       if (p.life <= 0) this.list.splice(i, 1);
     }
@@ -166,6 +189,13 @@ export class Particles {
         ctx.globalAlpha = Math.max(0, p.life);
         ctx.fillStyle = '#e6e6fa';
         ctx.fillRect(Math.round(p.x - cameraX), Math.round(p.y), 1, 1);
+        ctx.globalAlpha = 1;
+      }
+      if (p.type === 'oil') {
+        ctx.globalAlpha = Math.max(0, p.life * 0.8);
+        ctx.fillStyle = '#2F2F2F'; // Dark oil color
+        const size = Math.max(1, Math.floor(p.size));
+        ctx.fillRect(Math.round(p.x - cameraX), Math.round(p.y), size, size);
         ctx.globalAlpha = 1;
       }
     }

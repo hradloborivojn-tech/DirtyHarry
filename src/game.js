@@ -51,6 +51,11 @@ import { Narrative, drawHUD } from './ui/hud.js';
 import { drawInteractionHints } from './ui/interaction_hints.js';
 import { drawBoothDoorOverlay } from './render/booth_overlay.js';
 
+// Cellular Automata fire simulation
+import { FireCA } from './sim/fire_ca.js';
+import { DebugOverlay } from './sim/debug_overlay.js';
+import { EntityPixelManager } from './sim/entity_pixels.js';
+
 /* -------------------- Config: Molotov + Throw Preview -------------------- */
 const MOLOTOV_CONFIG = {
   minForce: 250,
@@ -126,11 +131,24 @@ const goonSystem = new GoonSystem(rng, dialogue, particles, covers);
 const npcSystem = new NPCSystem(dialogue);
 const combat = new CombatSystem(particles, camera, dialogue);
 
+/* ----------------------------- CA Fire System ---------------------------- */
+const fireCA = new FireCA();
+const entityPixelManager = new EntityPixelManager(fireCA.grid);
+const debugOverlay = new DebugOverlay(fireCA.grid);
+
 /* ------------------------------ Entities init ---------------------------- */
 const goons = spawnInitialGoons(rng);
 const npcs = spawnNPCs();
 goonSystem.setGoons(goons);
 npcSystem.setNPCs(npcs);
+
+// Attach entity pixel layers for burning simulation
+for (const goon of goons) {
+  entityPixelManager.attachEntity(goon, { x: goon.x, y: goon.y, w: 16, h: 16 });
+}
+for (const npc of npcs) {
+  entityPixelManager.attachEntity(npc, { x: npc.x, y: npc.y, w: 16, h: 16 });
+}
 
 /* --------------------------------- Player -------------------------------- */
 const player = {
@@ -436,12 +454,42 @@ function update(dt, t) {
     if (!m.active) { molotovProjectiles.splice(i,1); continue; }
     const event = m.update(dt, { goons, npcs, aabb });
     if (event?.shatter) {
-      handleMolotovShatter(m, event.hitEntity, MOLOTOV_CONFIG, { firePatches }, particles);
+      handleMolotovShatter(m, event.hitEntity, MOLOTOV_CONFIG, { firePatches }, particles, fireCA, entityPixelManager);
       molotovProjectiles.splice(i, 1);
     }
   }
 
-  // Update fire patches (ticks + shrink)
+  // Update CA fire simulation
+  fireCA.update(dt);
+  
+  // Update entity pixel layers  
+  entityPixelManager.update(dt);
+  
+  // Apply CA-based damage to entities
+  for (const g of goons) {
+    if (g.alive && !g.burning) {
+      const damage = fireCA.queryDamageForAABB({ x: g.x, y: g.y, w: 16, h: 16 });
+      if (damage > 0.1) {
+        applyBurningStatus(g, MOLOTOV_CONFIG.burnDuration);
+        if (typeof g.hp === 'number') {
+          g.hp = Math.max(0, g.hp - damage * 5 * dt); // 5 HP/s at full damage
+          if (g.hp <= 0) { g.alive = false; g.state = 'dying'; }
+        }
+      }
+    }
+  }
+  
+  for (const n of npcs) {
+    if (n.alive && !n.burning) {
+      const damage = fireCA.queryDamageForAABB({ x: n.x, y: n.y, w: 16, h: 16 });
+      if (damage > 0.1) {
+        applyBurningStatus(n, MOLOTOV_CONFIG.burnDuration);
+        // NPCs don't take HP damage directly, just burning status
+      }
+    }
+  }
+
+  // Update fire patches (legacy - kept for transition period)
   for (let i = firePatches.length - 1; i >= 0; i--) {
     const f = firePatches[i];
     if (!f.active) { firePatches.splice(i,1); continue; }
@@ -612,7 +660,10 @@ function render(t) {
   // Background
   background.draw(ctx, camera.x);
 
-  // Fire patches
+  // CA debug overlay (if enabled)
+  debugOverlay.draw(ctx, camera.x, VW, VH);
+
+  // Fire patches (legacy - will be removed)
   for (const f of firePatches) f.draw(ctx, camera.x, t);
 
   // Particles (behind)
@@ -795,5 +846,23 @@ if (typeof window !== 'undefined') {
     },
     getBoss: () => bossSystem.boss ? ({ x: bossSystem.boss.x, y: bossSystem.boss.y, alive: bossSystem.boss.alive, dir: bossSystem.boss.dir, state: bossSystem.boss.state, hidden: !!bossSystem.boss.hidden, invincible: !!bossSystem.boss.invincible }) : null,
     getBooth: () => ({ doorOpen: telephoneBooth.doorOpen }),
+    
+    // CA Fire System API
+    ca: {
+      igniteCircle: (x, y, r, materialId) => fireCA.igniteCircle(x, y, r, materialId),
+      addWaterCircle: (x, y, r, intensity) => fireCA.addWaterCircle(x, y, r, intensity),
+      addOilCircle: (x, y, r, amount) => fireCA.addOilCircle(x, y, r, amount),
+      addHeatCircle: (x, y, r, deltaT) => fireCA.addHeatCircle(x, y, r, deltaT),
+      queryBurningAt: (x, y) => fireCA.queryBurningAt(x, y),
+      queryDamageForAABB: (aabb) => fireCA.queryDamageForAABB(aabb),
+      attachEntityPixelLayer: (entityRef, aabb) => entityPixelManager.attachEntity(entityRef, aabb),
+      detachEntityPixelLayer: (entityRef) => entityPixelManager.detachEntity(entityRef),
+      getStats: () => fireCA.getStats(),
+      getDebugInfo: () => debugOverlay.getInfo(),
+      clear: () => fireCA.clear()
+    }
   };
+  
+  // Initialize debug overlay
+  debugOverlay.init();
 }
