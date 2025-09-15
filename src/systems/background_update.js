@@ -1,27 +1,49 @@
-// Animates window lights and silhouettes in the skyline
-import { buildings } from '../core/state.js';
-import { rng } from '../core/state.js';
+/**
+ * Background updater (annotated)
+ *
+ * Why this exists:
+ * - The Background system mixes world generation (buildings, stars) with time-based updates
+ *   (window twinkle, tiny road traffic queue). For determinism and to avoid visible “pops”
+ *   on slow frames, you might want to step background logic in small fixed increments even
+ *   if the main game dt spikes. This wrapper provides that fixed-step behavior.
+ *
+ * Responsibilities:
+ * - Accumulate elapsed time and call background.update() in fixed steps (default 1/60s)
+ * - Expose update(dt) API identical to other systems so the orchestrator can remain simple
+ *
+ * Usage:
+ *   const bg = new Background(rng, covers, telephoneBooth);
+ *   const bgStep = new FixedStepBackgroundUpdater(bg, 1/60);
+ *   // in main update(dt): bgStep.update(dt, cameraX);
+ *   // in render: bg.draw(ctx, cameraX);
+ */
+export class FixedStepBackgroundUpdater {
+  /**
+   * @param {import('./background.js').Background} background
+   * @param {number} stepSec fixed step size in seconds (default 1/60)
+   */
+  constructor(background, stepSec = 1/60) {
+    this.bg = background;
+    this.step = Math.max(1/240, Math.min(1/30, stepSec));
+    this.accum = 0;
+    this._lastCameraX = 0;
+  }
 
-export function updateSkyline(dt) {
-  for (const b of buildings) {
-    b.lightTimer -= dt;
-    if (b.lightTimer <= 0) {
-      b.lightTimer = 1.2 + rng()*3.5;
-      const w = b.windows[(Math.random()*b.windows.length)|0];
-      if (w) {
-        const turningOn = rng() < 0.55;
-        if (turningOn) {
-          w.lit = true;
-          // Occasionally show silhouette behind a newly lit window
-          if (rng() < 0.22) w.silTimer = 0.8 + rng()*1.6;
-        } else {
-          // Sometimes turn off
-          if (rng() < 0.5) w.lit = false;
-        }
-      }
-    }
-    for (const w of b.windows) {
-      if (w.silTimer > 0) w.silTimer -= dt;
+  /**
+   * Step the background logic in fixed increments to keep motion smooth.
+   * @param {number} dt seconds since last frame
+   * @param {number} cameraX optional cameraX if any bg elements need it during update
+   */
+  update(dt, cameraX = this._lastCameraX) {
+    this._lastCameraX = cameraX;
+    this.accum += Math.max(0, dt);
+    // Prevent spiral of death
+    const maxAccum = this.step * 6; // cap to 6 steps worth
+    if (this.accum > maxAccum) this.accum = maxAccum;
+
+    while (this.accum >= this.step) {
+      this.bg.update(this.step, cameraX);
+      this.accum -= this.step;
     }
   }
 }
