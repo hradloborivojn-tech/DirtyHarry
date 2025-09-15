@@ -36,7 +36,15 @@ export class GoonSystem {
         g.deathT = (g.deathT || 0) + dt * 1.8;
         if (!g._bled && g.deathT > 0.05) { this.particles.spawnBlood(g.x + 8, g.y + 8); g._bled = true; }
         if (!g._pooled && g.deathT > 0.35) { this.particles.spawnBloodPool(g.x + 8, GROUND_Y - 1, 12 + Math.floor(this.rng()*6)); g._pooled = true; }
-        if (g.deathT >= 1) { g.state = 'dead'; g.alive = false; }
+        if (g.deathT >= 1) { 
+          g.state = 'dead'; g.alive = false;
+          // Force fire agent to finish quickly like NPCs
+          if (g.fireAgent) {
+            const n = g.fireAgent.w * g.fireAgent.h;
+            for (let i = 0; i < n; i++) { g.fireAgent.burning[i] = 0; g.fireAgent.fuel[i] = Math.min(g.fireAgent.fuel[i], 0.01); }
+            g._smolderT = Math.max(g._smolderT || 0, 2.5);
+          }
+        }
         continue;
       }
       if (!g.alive) continue;

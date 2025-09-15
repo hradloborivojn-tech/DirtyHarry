@@ -869,8 +869,15 @@ export function drawNPC(ctx, x, y, scale, type, state, dir, opts = {}) {
       rect(ctx2, backX, armY-2, 4, 2, 2, jacket);
     }
   } else {
-    rect(ctx2, (dir===1?1:11), armY, 4, 2, 2, jacket);
-    rect(ctx2, (dir===1?11:1), armY+1, 4, 2, 2, jacket);
+    if (opts.flail) {
+      // both arms up and jittering while panicking
+      const jitter = Math.sin((opts.dancePhase||0) * Math.PI * 2 + (dir===1?0.4:-0.3))>0?0:1;
+      rect(ctx2, (dir===1?1:11), armY-2-jitter, 4, 2, 2, jacket);
+      rect(ctx2, (dir===1?11:1), armY-1+jitter, 4, 2, 2, jacket);
+    } else {
+      rect(ctx2, (dir===1?1:11), armY, 4, 2, 2, jacket);
+      rect(ctx2, (dir===1?11:1), armY+1, 4, 2, 2, jacket);
+    }
   }
   // Face hint
   rect(ctx2, (dir===1?8:6), 5, 1, 1, 2, '#2a2a2a');

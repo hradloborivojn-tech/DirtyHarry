@@ -95,3 +95,15 @@ http-server -p 8080
 - Resolution is a fixed logical 320x180. CSS scales it up with crisp pixel rendering.
 - The player sprite is 16x16 and visually ~15% of screen height once scaled.
 - All art is procedural rectangles for a stylized pixel look. You can tweak colors in `src/sprites.js`.
+
+### Fire system (Sep 2025)
+
+- Fixed residual afterglow by cooling non-burning cells toward ambient and tightening draw thresholds.
+- Molotov direct hits now set victims into a burning panic state instead of killing them instantly.
+- Burning damage from ground fire patches is applied in ticks (every ~0.5s by default) to prevent burst death.
+- Burning entities can ignite others on contact and leave small heat/fuel drips on the ground.
+
+Debug:
+
+- Toggle environment fire/heat debug: `window.__DH.toggleFireEnvDebug()`
+- Force boss spawn: `window.__DH.debugUnlockBoss()`

@@ -37,7 +37,7 @@ import { GoonSystem } from './systems/goon_ai.js';
 import { NPCSystem } from './systems/npc_ai.js';
 import { BossSystem } from './systems/boss.js';
 import { CombatSystem } from './systems/combat.js';
-import { handleMolotovShatter } from './systems/fire_integration.js';
+import { fireSystem, handleMolotovShatter } from './systems/fire_integration.js';
 import { FixedStepBackgroundUpdater } from './systems/background_update.js';
 
 // Status and weapons
@@ -446,7 +446,8 @@ function update(dt, t) {
     const f = firePatches[i];
     if (!f.active) { firePatches.splice(i,1); continue; }
     // Damage callback: apply burning and -1 HP per tick to goons; civilians only burn state (no HP here)
-    f.update(dt, { candidates: [...goons, ...npcs] }, (ent) => {
+    f.update(dt, { candidates: [...goons, ...npcs, player] }, (ent) => {
+      if (!ent) return;
       applyBurningStatus(ent, MOLOTOV_CONFIG.burnDuration);
       if (typeof ent.hp === 'number') {
         ent.hp = Math.max(0, ent.hp - 1);
@@ -470,6 +471,17 @@ function update(dt, t) {
       n.x = Math.max(0, Math.min(WORLD_W - 16, n.x));
     }
   }
+  // Player jitter when burning
+  {
+    const j = updateBurning(player, dt);
+    if (j?.impulseX) {
+      player.x += j.impulseX * dt;
+      clampPlayerToWorld(player);
+    }
+  }
+
+  // Step fire system globally (env + per-entity pixel agents)
+  fireSystem.step(dt, { goons, npcs, player });
 
   // Update systems
   combat.update(dt, {
@@ -480,10 +492,9 @@ function update(dt, t) {
     player,
     playerIframes,
   });
-  // playerIframes can be modified by combat; we sync back if present
   if (typeof window !== 'undefined') {} // placeholder to avoid lints
   if (typeof playerIframes === 'number') {
-    // no-op, value is mutated in-place by reference above if needed
+    // no-op, value may be mutated in combat
   }
 
   goonSystem.update(dt, player, t);
@@ -566,7 +577,6 @@ function update(dt, t) {
         if (near) {
           p.taken = true;
           addNote(p.note);
-          // Optional: a tiny floating title could be implemented as a particle or a dialogue line; omitted here for brevity
           break;
         }
       }
@@ -612,8 +622,11 @@ function render(t) {
   // Background
   background.draw(ctx, camera.x);
 
-  // Fire patches
-  for (const f of firePatches) f.draw(ctx, camera.x, t);
+  // Optional: visualize environment fire/heat (toggle inside fireSystem)
+  fireSystem.draw(ctx, camera.x);
+
+  // Fire patches (visual kept minimal; env handles flames)
+  for (const f of firePatches) f.draw?.(ctx, camera.x, t);
 
   // Particles (behind)
   particles.drawBack(ctx, camera.x, COLORS);
@@ -743,8 +756,6 @@ function restart() {
 
   // Dialogue, journal, narrative
   dialogue.clear();
-  // Keep journal notes across runs to reflect clues found; comment next line to preserve
-  // journal.notes = []; // optional clear
   narrative.set("Somewhere in L.A., dangerous man is on loose");
 
   // Boss and cutscene
@@ -788,12 +799,12 @@ if (typeof window !== 'undefined') {
     },
     shoot: () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' })); setTimeout(() => window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' })), 30); },
     debugUnlockBoss: () => {
-      // Mark all clues as collected and spawn the boss
       pois.forEach(p => p.taken = true);
       npcs.forEach(n => { if (n.state !== 'down') n.clueGiven = true; });
       if (!bossSystem.boss) bossSystem.spawn(telephoneBooth);
     },
-    getBoss: () => bossSystem.boss ? ({ x: bossSystem.boss.x, y: bossSystem.boss.y, alive: bossSystem.boss.alive, dir: bossSystem.boss.dir, state: bossSystem.boss.state, hidden: !!bossSystem.boss.hidden, invincible: !!bossSystem.boss.invincible }) : null,
+    getBoss: () => bossSystem.boss ? ({ x: bossSystem.boss.x, y: bossSystem.boss.y, alive: bossSystem.boss.alive, dir: bossSystem.boss.dir, state: bossSystem.boss.state }) : null,
     getBooth: () => ({ doorOpen: telephoneBooth.doorOpen }),
+    toggleFireEnvDebug: (on = null) => { fireSystem.showEnv = (on === null) ? !fireSystem.showEnv : !!on; },
   };
 }

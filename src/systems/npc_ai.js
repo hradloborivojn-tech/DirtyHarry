@@ -23,6 +23,17 @@ export class NPCSystem {
     for (const n of this.list) {
       n.panicTimer = (n.panicTimer || 0);
       // burning state updated by caller
+      const burning = !!n.burning;
+
+      // Queue burning panic if on fire
+      if (burning && n.state !== 'down' && n.state !== 'dying') {
+        if (n.state !== 'burning' && n.state !== 'panic_run') {
+          n.state = 'panic_run';
+          n._panicDir = (Math.random() < 0.5 ? -1 : 1);
+          n._panicSwap = 0.35 + Math.random() * 0.35; // seconds before swapping direction
+          n._panicArms = true; // hint for flailing pose in draw
+        }
+      }
 
       // dying anim to down
       if (n.state === 'dying') {
@@ -42,7 +53,23 @@ export class NPCSystem {
         n.fear = Math.min(1, (n.fear||0) + dt*2);
       }
 
-      if (n.state === 'flee') {
+      if (n.state === 'panic_run') {
+        // Zig-zag direction swaps while on fire
+        const speed = 44; // slightly faster than walk
+        n.x += (n._panicDir || 1) * speed * dt;
+        n._panicSwap -= dt;
+        if (n._panicSwap <= 0) {
+          n._panicDir = -(n._panicDir || 1);
+          n._panicSwap = 0.25 + Math.random() * 0.35;
+        }
+        // bounce at edges
+        if (n.x <= 0 || n.x >= WORLD_W - 16) n._panicDir = -(n._panicDir || 1);
+        // Occasionally transition back when burn ends
+        if (!burning) {
+          n.panicTimer += dt;
+          if (n.panicTimer > 1.0) n.state = 'afraid';
+        }
+      } else if (n.state === 'flee') {
         n.x += (dx > 0 ? 30 : -30) * dt;
         if (Math.abs(dx) > 120) {
           n.panicTimer += dt;
@@ -119,7 +146,9 @@ export class NPCSystem {
     for (const n of this.list) {
       const ox = Math.round((n._sx || 0));
       const oy = Math.round((n._sy || 0));
-      const npcOpts = { windSway: Math.sin(t * 0.35) * 1.0, deathT: (n.state==='down'?1:(n.deathT||0)) };
+  const npcOpts = { windSway: Math.sin(t * 0.35) * 1.0, deathT: (n.state==='down'?1:(n.deathT||0)) };
+  // hand-flailing visual hint during panic_run
+  npcOpts.flail = (n.state === 'panic_run');
       if (n.type === 'hotgirl') {
         const danceLike = (n.state === 'idle' || n.state === 'calm' || n.state === 'dance');
         if (danceLike) {
@@ -128,7 +157,8 @@ export class NPCSystem {
           npcOpts.dancePhase = phase - Math.floor(phase);
         }
       }
-      drawNPC(ctx, Math.round(n.x - cameraX + ox), Math.round(n.y + oy), 1, n.type, n.state, n.dir || 1, npcOpts);
+  const renderState = (n.state === 'panic_run') ? 'afraid' : n.state;
+  drawNPC(ctx, Math.round(n.x - cameraX + ox), Math.round(n.y + oy), 1, n.type, renderState, n.dir || 1, npcOpts);
       if (n.state === 'afraid' && Math.floor(t*2)%2===0 && !this.dialogue.active()) {
         drawSpeechBubble(ctx, "Don't shoot!", n.x - cameraX + 2, n.y - 2, 1, { speaker: 'npc', maxWidth: 192 - 16 });
       }

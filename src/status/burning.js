@@ -59,9 +59,10 @@ export function updateBurning(entity, dt) {
 }
 
 /**
- * Minimal over-entity flames + red multiply tint (pixel-art friendly).
+ * Burning overlay.
+ * If the entity has a per-pixel fire agent, render per-pixel flames; otherwise, fallback simple halo.
  * @param {CanvasRenderingContext2D} ctx
- * @param {{x:number,y:number,w?:number,h?:number}} entity
+ * @param {{x:number,y:number,w?:number,h?:number,fireAgent?:any}} entity
  * @param {number} t seconds
  * @param {number} cameraX
  */
@@ -69,6 +70,37 @@ export function drawBurningOverlay(ctx, entity, t, cameraX) {
   const gx = Math.round(entity.x - cameraX);
   const gy = Math.round(entity.y);
 
+  if (entity.fireAgent) {
+    const agent = entity.fireAgent;
+    const map = agent.getBurnMap();
+    const w = agent.w, h = agent.h;
+    ctx.save();
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const v = map[y*w + x];
+        if (v <= 0) continue;
+        ctx.globalAlpha = Math.min(0.6, v / 255 * 0.5) * (0.8 + 0.2 * Math.sin((t + (x+y)*0.01) * 40));
+        ctx.fillStyle = '#ff7a2a';
+        ctx.fillRect(gx + x, gy + y, 1, 1);
+      }
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    // Post-flame smolder: subtle dark-orange tint for a short time on corpses
+    if ((entity.state === 'dying' || entity.state === 'down') && entity._smolderT && entity._smolderT > 0) {
+      const a = Math.min(0.15, entity._smolderT * 0.05);
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#3a1a0a';
+      ctx.fillRect(gx, gy, w, h);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      entity._smolderT = Math.max(0, entity._smolderT - (1/60)); // approx per-frame fade; orchestrator calls this each frame
+    }
+    return;
+  }
+
+  // Legacy simple halo
   // Flames
   const num = 3;
   for (let i = 0; i < num; i++) {
