@@ -1134,6 +1134,11 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
   // Molotov input
   let molotovEquip = pressed.has('q');
   let molotovCharge = keys.has(' '); // Space for charge (when in molotov mode)
+  
+  // Prevent shooting when molotov is equipped
+  if (player.molotovState !== 'inactive') {
+    shoot = false; // Override shoot when molotov is active
+  }
 
     // Boss intro cutscene trigger & control lock
     // Conditions to start: boss exists, intro not done, not already active, and booth is visible in viewport
@@ -2609,8 +2614,8 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
 
   // UI
   // Energy bar (3 segments) — moved to top-left
+  const bx = 4, by = 4;
     const drawEnergy = () => {
-      const bx = 4, by = 4;
       for (let i = 0; i < player.maxHp; i++) {
         // outline
         ctx.strokeStyle = '#444';
@@ -2638,7 +2643,7 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
       // Draw count
       ctx.fillStyle = '#fff';
       ctx.font = '6px monospace';
-      drawTextHD(player.molotovCount.toString(), molotovX + 5, molotovY + 3);
+      ctx.fillText(player.molotovCount.toString(), molotovX + 5, molotovY + 3);
       
       // State indicator
       if (player.molotovState === 'charging') {
