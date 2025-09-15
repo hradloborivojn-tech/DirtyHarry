@@ -39,6 +39,11 @@ import { BossSystem } from './systems/boss.js';
 import { CombatSystem } from './systems/combat.js';
 import { handleMolotovShatter } from './systems/fire_integration.js';
 import { FixedStepBackgroundUpdater } from './systems/background_update.js';
+import { FireSimulation } from './systems/fire_simulation.js';
+import { FireDemoScene } from './systems/fire_demo.js';
+
+// Fire rendering
+import { FireRenderer } from './render/fire_renderer.js';
 
 // Status and weapons
 import { applyBurningStatus, updateBurning, drawBurningOverlay } from './status/burning.js';
@@ -120,6 +125,14 @@ const backgroundStepper = new FixedStepBackgroundUpdater(background); // annotat
 
 const traffic = new ForegroundTraffic(rng);
 const particles = new Particles(rng);
+
+// Initialize fire simulation system
+const fireSimulation = new FireSimulation({
+  deterministic: false,
+  debugMode: false
+});
+const fireRenderer = new FireRenderer();
+const fireDemo = new FireDemoScene(fireSimulation);
 
 const bossSystem = new BossSystem(dialogue);
 const goonSystem = new GoonSystem(rng, dialogue, particles, covers);
@@ -247,6 +260,28 @@ function update(dt, t) {
   // Molotov input
   const molotovEquip = pressed.has('q');
   const molotovChargeHeld = keys.has(' '); // hold to charge throw when lit
+  
+  // Fire simulation debug controls (for testing)
+  if (pressed.has('1')) fireRenderer.toggleDebugMode('showHeatMap');
+  if (pressed.has('2')) fireRenderer.toggleDebugMode('showGrid');
+  if (pressed.has('3')) fireRenderer.toggleDebugMode('showOxygen');
+  if (pressed.has('4')) fireRenderer.toggleDebugMode('showFuel');
+  if (pressed.has('f')) {
+    // Spawn fire at player location
+    fireSimulation.igniteAt(player.x + 8, player.y + 8, 800, 4);
+  }
+  if (pressed.has('g')) {
+    // Add water at player location
+    fireSimulation.addLiquid(player.x + 8, player.y + 8, 4, 80, 3); // MaterialType.WATER = 4
+  }
+  
+  // Fire demo controls
+  if (pressed.has('5')) fireDemo.setupDemo();
+  if (pressed.has('6')) fireDemo.triggerScenario('cabin_fire');
+  if (pressed.has('7')) fireDemo.triggerScenario('oil_explosion');
+  if (pressed.has('8')) fireDemo.triggerScenario('chain_reaction');
+  if (pressed.has('9')) fireDemo.triggerScenario('full_demo');
+  if (pressed.has('0')) fireDemo.reset();
 
   // If a boss pre-fight is spawned but intro isn't done, gate approach and show hints
   if (!bossSystem.boss && player.x > WORLD_W - 90) {
@@ -516,6 +551,9 @@ function update(dt, t) {
   dialogue.update(dt);
   narrative.update(dt);
   camera.update(dt);
+  
+  // Update fire simulation system
+  fireSimulation.update(dt);
 
   // Camera follow (unless boss arena active or cutscene active)
   if (!bossSystem.active && !bossSystem.cutscene.active) {
@@ -612,7 +650,10 @@ function render(t) {
   // Background
   background.draw(ctx, camera.x);
 
-  // Fire patches
+  // Fire simulation (new Noita-like system)
+  fireRenderer.render(ctx, fireSimulation, camera.x, t);
+
+  // Fire patches (legacy - for compatibility with molotovs)
   for (const f of firePatches) f.draw(ctx, camera.x, t);
 
   // Particles (behind)
@@ -726,6 +767,23 @@ function render(t) {
     ctx.font = '6px monospace';
     const sub2 = 'Boss defeated. Press R to play again';
     ctx.fillText(sub2, Math.floor(VW/2 - ctx.measureText(sub2).width/2), Math.floor(VH/2 + 6));
+  }
+
+  // Fire Demo Instructions (if demo mode enabled)
+  if (fireRenderer.debugMode.showHeatMap || fireRenderer.debugMode.showGrid) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.fillRect(VW - 140, 5, 135, 85);
+    
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '6px monospace';
+    ctx.fillText('FIRE DEMO CONTROLS:', VW - 135, 15);
+    ctx.fillText('5 - Setup Demo Scene', VW - 135, 25);
+    ctx.fillText('6 - Cabin Fire', VW - 135, 35);
+    ctx.fillText('7 - Oil Explosion', VW - 135, 45);
+    ctx.fillText('8 - Chain Reaction', VW - 135, 55);
+    ctx.fillText('9 - Full Demo', VW - 135, 65);
+    ctx.fillText('0 - Reset Scene', VW - 135, 75);
+    ctx.fillText('F - Spawn Fire', VW - 135, 85);
   }
 
   ctx.restore();
