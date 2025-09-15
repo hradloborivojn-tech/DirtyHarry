@@ -17,6 +17,7 @@
 
 import { VW, VH } from '../core/constants.js';
 import { makeRng } from '../core/rng.js';
+import { FireParticleSystem } from './fire_particles.js';
 
 // Fire simulation constants
 const CELL_SIZE = 2; // 2x2 pixel cells for performance
@@ -254,8 +255,9 @@ export class FireSimulation {
     this.updateCount = 0;
     this.tickTime = 0;
 
-    // Particles for visual effects
-    this.particles = [];
+    // Enhanced particle system
+    this.particleSystem = new FireParticleSystem(this.rng);
+    this.particles = []; // Legacy compatibility
     this.maxParticles = 2000;
   }
 
@@ -412,7 +414,7 @@ export class FireSimulation {
     }
 
     // Update particles
-    this.updateParticles(dt);
+    this.particleSystem.update(dt, this);
 
     // Performance tracking
     this.tickTime = performance.now() - startTime;
@@ -591,9 +593,14 @@ export class FireSimulation {
       // Light emission
       cell.lightEnergy = Math.min(100, burnRate * 2);
       
-      // Generate embers (particle effects)
-      if (this.rng() < 0.1 * dt) {
-        this.spawnEmber(x, y);
+      // Generate embers (particle effects) - enhanced for waterfall effect
+      if (this.rng() < 0.3 * dt) { // Increased spawn rate
+        this.particleSystem.spawnEmber(x * CELL_SIZE, y * CELL_SIZE, cell.temperature, burnRate / material.burnRate);
+      }
+      
+      // Generate smoke
+      if (this.rng() < 0.2 * dt) {
+        this.particleSystem.spawnSmoke(x * CELL_SIZE, y * CELL_SIZE, material.smokeYield);
       }
       
       // Stop burning when fuel depleted or temperature too low
@@ -619,19 +626,32 @@ export class FireSimulation {
       if (cell.temperature > 100) {
         cell.materialId = MaterialType.STEAM;
         cell.pressure += 20; // Steam expansion
+        // Steam burst effect
+        if (this.rng() < 0.5) {
+          this.particleSystem.spawnSteam(x * CELL_SIZE, y * CELL_SIZE, Math.min(2, cell.pressure / 10));
+        }
         this.markDirty(x, y);
       }
     }
     
     // Oil spreading and enhanced burning
     if (cell.materialId === MaterialType.OIL && cell.temperature > 150) {
-      // Oil spreads fire more aggressively
+      // Oil spreads fire more aggressively and creates explosive effects
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (dx === 0 && dy === 0) continue;
           const neighbor = this.getCellNext(x + dx, y + dy);
           if (neighbor && neighbor.materialId === MaterialType.OIL) {
             neighbor.temperature = Math.max(neighbor.temperature, cell.temperature * 0.8);
+            // Chance for ember burst from oil ignition
+            if (!neighbor.burning && neighbor.temperature > 200 && this.rng() < 0.1) {
+              this.particleSystem.spawnEmberBurst(
+                (x + dx) * CELL_SIZE, 
+                (y + dy) * CELL_SIZE, 
+                6, 
+                2.0
+              );
+            }
           }
         }
       }
@@ -668,70 +688,6 @@ export class FireSimulation {
   }
 
   /**
-   * Spawn an ember particle
-   */
-  spawnEmber(gridX, gridY) {
-    if (this.particles.length >= this.maxParticles) {
-      // Remove oldest particle
-      this.particles.shift();
-    }
-
-    const world = this.gridToWorld(gridX, gridY);
-    const ember = {
-      type: 'ember',
-      x: world.x + this.rng() * CELL_SIZE,
-      y: world.y + this.rng() * CELL_SIZE,
-      vx: (this.rng() - 0.5) * 20,
-      vy: -30 - this.rng() * 40, // Strong upward bias
-      life: 2 + this.rng() * 3,
-      maxLife: 2 + this.rng() * 3,
-      temperature: 800 + this.rng() * 400,
-      size: 1 + this.rng() * 2
-    };
-    
-    this.particles.push(ember);
-  }
-
-  /**
-   * Update particle systems
-   */
-  updateParticles(dt) {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const particle = this.particles[i];
-      
-      // Update position
-      particle.x += particle.vx * dt;
-      particle.y += particle.vy * dt;
-      
-      // Apply gravity and air resistance
-      particle.vy += 100 * dt; // Gravity
-      particle.vx *= 0.98; // Air resistance
-      particle.vy *= 0.98;
-      
-      // Convection (embers rise in hot air)
-      if (particle.type === 'ember') {
-        const { x: gridX, y: gridY } = this.worldToGrid(particle.x, particle.y);
-        const cell = this.getCell(gridX, gridY);
-        if (cell && cell.temperature > AMBIENT_TEMPERATURE + 100) {
-          particle.vy -= 50 * dt; // Additional upward force
-        }
-      }
-      
-      // Age and remove dead particles
-      particle.life -= dt;
-      if (particle.life <= 0) {
-        this.particles.splice(i, 1);
-        continue;
-      }
-      
-      // Cool down embers
-      if (particle.type === 'ember') {
-        particle.temperature = Math.max(200, particle.temperature - 200 * dt);
-      }
-    }
-  }
-
-  /**
    * Swap current and next buffers
    */
   swapBuffers() {
@@ -742,12 +698,16 @@ export class FireSimulation {
    * Get debug information
    */
   getDebugInfo() {
+    const particleStats = this.particleSystem.getStats();
     return {
       gridSize: `${GRID_W}x${GRID_H}`,
       cellSize: CELL_SIZE,
       activeChunks: this.activeChunks.size,
       dirtyRegions: this.dirtyRegions.size,
-      particles: this.particles.length,
+      particles: particleStats.total,
+      embers: particleStats.ember,
+      smoke: particleStats.smoke,
+      steam: particleStats.steam,
       updateTime: this.tickTime.toFixed(2) + 'ms',
       updateCount: this.updateCount
     };

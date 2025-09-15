@@ -90,6 +90,23 @@ http-server -p 8080
 - If the skyline buildings look yellow, hard refresh so your browser reloads the JS (Ctrl+F5 on Windows). A previous bug let the window light color leak into the building fill; this is fixed. Buildings should be deep blue-gray with very dim windows.
 - If controls don't respond, click once on the canvas to focus it.
 
+## Fire Simulation System v1.1
+
+This version introduces a comprehensive Noita-inspired fire simulation system with:
+
+- **Cellular automata fire engine** with realistic heat propagation and material interactions
+- **7+ material types** (wood, cloth, oil, water, stone, metal, air) with unique properties
+- **Enhanced particle effects** featuring ember waterfalls and smoke with curl noise
+- **Interactive demo scenes** showcasing fire spreading, explosions, and water extinguishing
+- **Debug visualization tools** for heat maps, oxygen levels, and material states
+
+### Fire Demo Controls
+- `5` - Setup demo scene  |  `6` - Cabin fire  |  `7` - Oil explosion
+- `8` - Chain reaction   |  `9` - Full demo   |  `0` - Reset scene
+- `F` - Spawn fire       |  `G` - Add water   |  `1-4` - Debug overlays
+
+See [FIRE_SYSTEM.md](FIRE_SYSTEM.md) for detailed documentation.
+
 ## Notes
 
 - Resolution is a fixed logical 320x180. CSS scales it up with crisp pixel rendering.

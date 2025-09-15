@@ -40,6 +40,7 @@ import { CombatSystem } from './systems/combat.js';
 import { handleMolotovShatter } from './systems/fire_integration.js';
 import { FixedStepBackgroundUpdater } from './systems/background_update.js';
 import { FireSimulation } from './systems/fire_simulation.js';
+import { FireDemoScene } from './systems/fire_demo.js';
 
 // Fire rendering
 import { FireRenderer } from './render/fire_renderer.js';
@@ -131,6 +132,7 @@ const fireSimulation = new FireSimulation({
   debugMode: false
 });
 const fireRenderer = new FireRenderer();
+const fireDemo = new FireDemoScene(fireSimulation);
 
 const bossSystem = new BossSystem(dialogue);
 const goonSystem = new GoonSystem(rng, dialogue, particles, covers);
@@ -272,6 +274,14 @@ function update(dt, t) {
     // Add water at player location
     fireSimulation.addLiquid(player.x + 8, player.y + 8, 4, 80, 3); // MaterialType.WATER = 4
   }
+  
+  // Fire demo controls
+  if (pressed.has('5')) fireDemo.setupDemo();
+  if (pressed.has('6')) fireDemo.triggerScenario('cabin_fire');
+  if (pressed.has('7')) fireDemo.triggerScenario('oil_explosion');
+  if (pressed.has('8')) fireDemo.triggerScenario('chain_reaction');
+  if (pressed.has('9')) fireDemo.triggerScenario('full_demo');
+  if (pressed.has('0')) fireDemo.reset();
 
   // If a boss pre-fight is spawned but intro isn't done, gate approach and show hints
   if (!bossSystem.boss && player.x > WORLD_W - 90) {
@@ -757,6 +767,23 @@ function render(t) {
     ctx.font = '6px monospace';
     const sub2 = 'Boss defeated. Press R to play again';
     ctx.fillText(sub2, Math.floor(VW/2 - ctx.measureText(sub2).width/2), Math.floor(VH/2 + 6));
+  }
+
+  // Fire Demo Instructions (if demo mode enabled)
+  if (fireRenderer.debugMode.showHeatMap || fireRenderer.debugMode.showGrid) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.fillRect(VW - 140, 5, 135, 85);
+    
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '6px monospace';
+    ctx.fillText('FIRE DEMO CONTROLS:', VW - 135, 15);
+    ctx.fillText('5 - Setup Demo Scene', VW - 135, 25);
+    ctx.fillText('6 - Cabin Fire', VW - 135, 35);
+    ctx.fillText('7 - Oil Explosion', VW - 135, 45);
+    ctx.fillText('8 - Chain Reaction', VW - 135, 55);
+    ctx.fillText('9 - Full Demo', VW - 135, 65);
+    ctx.fillText('0 - Reset Scene', VW - 135, 75);
+    ctx.fillText('F - Spawn Fire', VW - 135, 85);
   }
 
   ctx.restore();

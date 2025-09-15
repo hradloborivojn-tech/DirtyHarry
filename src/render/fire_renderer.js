@@ -104,7 +104,7 @@ export class FireRenderer {
     
     // Render particles
     if (this.debugMode.showParticles) {
-      this.renderParticles(ctx, fireSimulation.particles, cameraX, t);
+      fireSimulation.particleSystem.render(ctx, cameraX, t);
     }
     
     // Composite all layers to main context
@@ -246,89 +246,6 @@ export class FireRenderer {
     }
     
     this.lightCtx.globalCompositeOperation = 'source-over';
-  }
-
-  /**
-   * Render particle systems
-   */
-  renderParticles(ctx, particles, cameraX, t) {
-    for (const particle of particles) {
-      const screenX = particle.x - cameraX;
-      
-      // Skip if outside screen
-      if (screenX < -10 || screenX > VW + 10) continue;
-      
-      if (particle.type === 'ember') {
-        this.renderEmber(ctx, particle, screenX, t);
-      } else if (particle.type === 'smoke') {
-        this.renderSmoke(ctx, particle, screenX, t);
-      }
-    }
-  }
-
-  /**
-   * Render an ember particle
-   */
-  renderEmber(ctx, ember, screenX, t) {
-    const age = 1 - (ember.life / ember.maxLife);
-    const size = ember.size * (1 - age * 0.5);
-    const alpha = (1 - age) * 0.9;
-    
-    // Temperature-based color
-    const tempRatio = Math.min(1, ember.temperature / 1000);
-    const r = Math.floor(255 * tempRatio);
-    const g = Math.floor(180 * tempRatio);
-    const b = Math.floor(50 * tempRatio);
-    
-    // Flicker effect
-    const flicker = 0.7 + 0.3 * Math.sin(t * 20 + ember.x * 0.1);
-    
-    ctx.save();
-    ctx.globalAlpha = alpha * flicker;
-    
-    // Create radial gradient for glow
-    const gradient = ctx.createRadialGradient(screenX, ember.y, 0, screenX, ember.y, size * 2);
-    gradient.addColorStop(0, `rgb(${r}, ${g}, ${b})`);
-    gradient.addColorStop(0.7, `rgb(${Math.floor(r * 0.8)}, ${Math.floor(g * 0.6)}, ${Math.floor(b * 0.4)})`);
-    gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
-    
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(screenX, ember.y, size * 2, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Core bright spot
-    ctx.fillStyle = `rgba(255, 255, 200, ${alpha * 0.8})`;
-    ctx.beginPath();
-    ctx.arc(screenX, ember.y, size * 0.5, 0, Math.PI * 2);
-    ctx.fill();
-    
-    ctx.restore();
-  }
-
-  /**
-   * Render a smoke particle
-   */
-  renderSmoke(ctx, smoke, screenX, t) {
-    const age = 1 - (smoke.life / smoke.maxLife);
-    const size = smoke.size * (1 + age * 2); // Smoke expands
-    const alpha = (1 - age) * 0.4;
-    
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    
-    // Create radial gradient for smoke
-    const gradient = ctx.createRadialGradient(screenX, smoke.y, 0, screenX, smoke.y, size);
-    gradient.addColorStop(0, 'rgba(80, 80, 100, 0.6)');
-    gradient.addColorStop(0.5, 'rgba(60, 60, 80, 0.3)');
-    gradient.addColorStop(1, 'rgba(40, 40, 60, 0)');
-    
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(screenX, smoke.y, size, 0, Math.PI * 2);
-    ctx.fill();
-    
-    ctx.restore();
   }
 
   /**
