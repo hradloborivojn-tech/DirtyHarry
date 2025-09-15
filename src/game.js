@@ -39,6 +39,10 @@ import { BossSystem } from './systems/boss.js';
 import { CombatSystem } from './systems/combat.js';
 import { handleMolotovShatter } from './systems/fire_integration.js';
 import { FixedStepBackgroundUpdater } from './systems/background_update.js';
+import { FireSimulation } from './systems/fire_simulation.js';
+
+// Fire rendering
+import { FireRenderer } from './render/fire_renderer.js';
 
 // Status and weapons
 import { applyBurningStatus, updateBurning, drawBurningOverlay } from './status/burning.js';
@@ -120,6 +124,13 @@ const backgroundStepper = new FixedStepBackgroundUpdater(background); // annotat
 
 const traffic = new ForegroundTraffic(rng);
 const particles = new Particles(rng);
+
+// Initialize fire simulation system
+const fireSimulation = new FireSimulation({
+  deterministic: false,
+  debugMode: false
+});
+const fireRenderer = new FireRenderer();
 
 const bossSystem = new BossSystem(dialogue);
 const goonSystem = new GoonSystem(rng, dialogue, particles, covers);
@@ -247,6 +258,20 @@ function update(dt, t) {
   // Molotov input
   const molotovEquip = pressed.has('q');
   const molotovChargeHeld = keys.has(' '); // hold to charge throw when lit
+  
+  // Fire simulation debug controls (for testing)
+  if (pressed.has('1')) fireRenderer.toggleDebugMode('showHeatMap');
+  if (pressed.has('2')) fireRenderer.toggleDebugMode('showGrid');
+  if (pressed.has('3')) fireRenderer.toggleDebugMode('showOxygen');
+  if (pressed.has('4')) fireRenderer.toggleDebugMode('showFuel');
+  if (pressed.has('f')) {
+    // Spawn fire at player location
+    fireSimulation.igniteAt(player.x + 8, player.y + 8, 800, 4);
+  }
+  if (pressed.has('g')) {
+    // Add water at player location
+    fireSimulation.addLiquid(player.x + 8, player.y + 8, 4, 80, 3); // MaterialType.WATER = 4
+  }
 
   // If a boss pre-fight is spawned but intro isn't done, gate approach and show hints
   if (!bossSystem.boss && player.x > WORLD_W - 90) {
@@ -516,6 +541,9 @@ function update(dt, t) {
   dialogue.update(dt);
   narrative.update(dt);
   camera.update(dt);
+  
+  // Update fire simulation system
+  fireSimulation.update(dt);
 
   // Camera follow (unless boss arena active or cutscene active)
   if (!bossSystem.active && !bossSystem.cutscene.active) {
@@ -612,7 +640,10 @@ function render(t) {
   // Background
   background.draw(ctx, camera.x);
 
-  // Fire patches
+  // Fire simulation (new Noita-like system)
+  fireRenderer.render(ctx, fireSimulation, camera.x, t);
+
+  // Fire patches (legacy - for compatibility with molotovs)
   for (const f of firePatches) f.draw(ctx, camera.x, t);
 
   // Particles (behind)
