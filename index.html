@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dirty Harry - Pixel Art Game</title>
+  <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body>
+  <!-- Title (typed via game.js) -->
+  <div id="title" aria-hidden="false"></div>
+
+  <!-- Use the game's virtual resolution for a crisp 1:1 draw; CSS scales it up pixel-perfect -->
+  <canvas id="game" width="192" height="108" aria-label="Dirty Harry pixel game"></canvas>
+  <div id="overlay" aria-hidden="true">
+    <div class="panel">
+      <h1>Dirty Harry</h1>
+    <p>
+  Move: Arrows/WASD &nbsp;|&nbsp; Jump: Up/W &nbsp;|&nbsp; Duck: Down/S &nbsp;|&nbsp; Aim: Shift &nbsp;|&nbsp; Shoot: Space &nbsp;|&nbsp; Interrogate: E &nbsp;|&nbsp; Journal: J &nbsp;|&nbsp; Pause: P &nbsp;|&nbsp; Restart: R
+    </p>
+    </div>
+  </div>
+  <script type="module" defer src="src/game.js"></script>
+</body>
+</html>
