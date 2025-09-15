@@ -37,7 +37,7 @@ import { GoonSystem } from './systems/goon_ai.js';
 import { NPCSystem } from './systems/npc_ai.js';
 import { BossSystem } from './systems/boss.js';
 import { CombatSystem } from './systems/combat.js';
-import { handleMolotovShatter } from './systems/fire_integration.js';
+import { handleMolotovShatter, setFireCA, queryCADamage, isEntityInBurningArea, isCAActive } from './systems/fire_integration.js';
 import { FixedStepBackgroundUpdater } from './systems/background_update.js';
 
 // Status and weapons
@@ -50,6 +50,10 @@ import { simulateTrajectory, drawTrajectory } from './ui/trajectory_preview.js';
 import { Narrative, drawHUD } from './ui/hud.js';
 import { drawInteractionHints } from './ui/interaction_hints.js';
 import { drawBoothDoorOverlay } from './render/booth_overlay.js';
+
+// Cellular Automata Fire System
+import { FireCA } from './sim/fire_ca.js';
+import { DebugOverlay, DEBUG_MODES } from './sim/debug_overlay.js';
 
 /* -------------------- Config: Molotov + Throw Preview -------------------- */
 const MOLOTOV_CONFIG = {
@@ -120,6 +124,13 @@ const backgroundStepper = new FixedStepBackgroundUpdater(background); // annotat
 
 const traffic = new ForegroundTraffic(rng);
 const particles = new Particles(rng);
+
+// Cellular Automata Fire System
+const fireCA = new FireCA();
+const debugOverlay = new DebugOverlay();
+
+// Initialize fire integration
+setFireCA(fireCA);
 
 const bossSystem = new BossSystem(dialogue);
 const goonSystem = new GoonSystem(rng, dialogue, particles, covers);
@@ -243,6 +254,15 @@ function update(dt, t) {
   let shoot = pressed.has(' ');
   let interact = pressed.has('e');
   let toggleJournal = pressed.has('j');
+
+  // Debug overlay toggle
+  const toggleDebug = pressed.has('`');
+  if (toggleDebug) {
+    debugOverlay.toggle();
+    if (debugOverlay.visible) {
+      debugOverlay.nextMode();
+    }
+  }
 
   // Molotov input
   const molotovEquip = pressed.has('q');
@@ -441,18 +461,45 @@ function update(dt, t) {
     }
   }
 
-  // Update fire patches (ticks + shrink)
-  for (let i = firePatches.length - 1; i >= 0; i--) {
-    const f = firePatches[i];
-    if (!f.active) { firePatches.splice(i,1); continue; }
-    // Damage callback: apply burning and -1 HP per tick to goons; civilians only burn state (no HP here)
-    f.update(dt, { candidates: [...goons, ...npcs] }, (ent) => {
-      applyBurningStatus(ent, MOLOTOV_CONFIG.burnDuration);
-      if (typeof ent.hp === 'number') {
-        ent.hp = Math.max(0, ent.hp - 1);
-        if (ent.hp <= 0) { ent.alive = false; ent.state = 'dying'; }
+  // Update fire patches (ticks + shrink) - only if CA is not active
+  if (!isCAActive()) {
+    for (let i = firePatches.length - 1; i >= 0; i--) {
+      const f = firePatches[i];
+      if (!f.active) { firePatches.splice(i,1); continue; }
+      // Damage callback: apply burning and -1 HP per tick to goons; civilians only burn state (no HP here)
+      f.update(dt, { candidates: [...goons, ...npcs] }, (ent) => {
+        applyBurningStatus(ent, MOLOTOV_CONFIG.burnDuration);
+        if (typeof ent.hp === 'number') {
+          ent.hp = Math.max(0, ent.hp - 1);
+          if (ent.hp <= 0) { ent.alive = false; ent.state = 'dying'; }
+        }
+      });
+    }
+  } else {
+    // Update cellular automata fire system
+    fireCA.update(dt);
+    
+    // Apply CA-based damage to entities
+    for (const g of goons) {
+      if (!g.alive || g.state === 'dying' || g.state === 'dead') continue;
+      
+      const damage = queryCADamage(g);
+      if (damage > 0) {
+        applyBurningStatus(g, MOLOTOV_CONFIG.burnDuration);
+        if (typeof g.hp === 'number') {
+          g.hp = Math.max(0, g.hp - damage);
+          if (g.hp <= 0) { g.alive = false; g.state = 'dying'; }
+        }
       }
-    });
+    }
+    
+    for (const n of npcs) {
+      if (n.state === 'down' || n.state === 'dying') continue;
+      
+      if (isEntityInBurningArea(n)) {
+        applyBurningStatus(n, MOLOTOV_CONFIG.burnDuration);
+      }
+    }
   }
 
   // Burning status jitters (suggested movement impulses)
@@ -612,8 +659,10 @@ function render(t) {
   // Background
   background.draw(ctx, camera.x);
 
-  // Fire patches
-  for (const f of firePatches) f.draw(ctx, camera.x, t);
+  // Fire patches - only render if CA is not active
+  if (!isCAActive()) {
+    for (const f of firePatches) f.draw(ctx, camera.x, t);
+  }
 
   // Particles (behind)
   particles.drawBack(ctx, camera.x, COLORS);
@@ -729,6 +778,9 @@ function render(t) {
   }
 
   ctx.restore();
+
+  // Render debug overlay
+  debugOverlay.render(fireCA, camera.x);
 }
 
 /* -------------------------------- Restart -------------------------------- */
@@ -795,5 +847,23 @@ if (typeof window !== 'undefined') {
     },
     getBoss: () => bossSystem.boss ? ({ x: bossSystem.boss.x, y: bossSystem.boss.y, alive: bossSystem.boss.alive, dir: bossSystem.boss.dir, state: bossSystem.boss.state, hidden: !!bossSystem.boss.hidden, invincible: !!bossSystem.boss.invincible }) : null,
     getBooth: () => ({ doorOpen: telephoneBooth.doorOpen }),
+    
+    // Cellular Automata helpers
+    ca: {
+      igniteCircle: (x, y, r, materialId) => fireCA.igniteCircle(x, y, r, materialId),
+      addWaterCircle: (x, y, r, intensity) => fireCA.addWaterCircle(x, y, r, intensity),
+      addOilCircle: (x, y, r, amount) => fireCA.addOilCircle(x, y, r, amount),
+      addHeatCircle: (x, y, r, deltaT) => fireCA.addHeatCircle(x, y, r, deltaT),
+      queryBurningAt: (x, y) => fireCA.queryBurningAt(x, y),
+      getDebugInfo: () => fireCA.getDebugInfo(),
+      toggleDebug: () => {
+        debugOverlay.toggle();
+        if (debugOverlay.visible) debugOverlay.nextMode();
+      },
+      setDebugMode: (mode) => {
+        if (!debugOverlay.visible) debugOverlay.toggle();
+        debugOverlay.setMode(mode);
+      }
+    }
   };
 }
