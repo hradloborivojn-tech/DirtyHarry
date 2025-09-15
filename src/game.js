@@ -17,6 +17,23 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
   const GRAVITY = 320; // px/s^2 for jump physics
   const ARENA_WIDTH = 120; // boss arena width
 
+  // Molotov Cocktail Configuration
+  const MOLOTOV_CONFIG = {
+    minForce: 250,
+    maxForce: 650,
+    maxChargeTime: 1200, // ms
+    gravity: 1500,       // px/s^2
+    spinSpeed: 6.0,      // rad/s
+    fireLifetime: 5000,  // ms
+    fireRadiusStart: 60,
+    fireRadiusEnd: 40,
+    fireTickInterval: 500, // ms
+    directHitBonus: 10,
+    burnDuration: 4000,
+    inventoryStart: 3,
+    arcSteps: 22
+  };
+
   // Backing store scale for crisp text rendering
   const INTERNAL_SCALE = 3;
   // Screen shake amplitude in virtual pixels (decays each update)
@@ -80,6 +97,13 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
     twirlT: 0,           // 0..1 progress for current twirl animation
     twirlActive: false,  // whether twirl is playing
     twirlCooldown: 0,    // seconds before another twirl may start
+    
+    // Molotov Cocktail state
+    molotovCount: MOLOTOV_CONFIG.inventoryStart,
+    molotovState: 'inactive', // 'inactive' | 'preparing' | 'lit' | 'charging' | 'thrown' | 'cooldown'
+    molotovChargeStart: 0,
+    molotovCharge: 0,
+    molotovCooldown: 0,
   };
 
   let cameraX = 0;
@@ -122,6 +146,10 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
   const bossBullets = [];
   const particles = [];
   const floatTexts = []; // floating pickup titles {text,x,y,vx,vy,life,color,fontPx}
+  
+  // Molotov Cocktail entities
+  const molotovProjectiles = [];
+  const firePatches = [];
   const covers = [
     {x: 120, y: GROUND_Y - 8, w: 14, h: 8},
     {x: 260, y: GROUND_Y - 8, w: 14, h: 8},
@@ -802,6 +830,296 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
     requestAnimationFrame(loop);
   }
 
+  // Molotov Cocktail Controller
+  function updateMolotovController(dt, t, equipPressed, chargePressed) {
+    // Update cooldown
+    if (player.molotovCooldown > 0) player.molotovCooldown -= dt;
+    
+    // State machine
+    switch (player.molotovState) {
+      case 'inactive':
+        if (equipPressed && player.molotovCount > 0 && player.molotovCooldown <= 0) {
+          player.molotovState = 'preparing';
+          player.molotovChargeStart = performance.now();
+        }
+        break;
+        
+      case 'preparing':
+        // Small delay (~250ms) then transition to lit
+        if (performance.now() - player.molotovChargeStart > 250) {
+          player.molotovState = 'lit';
+        }
+        break;
+        
+      case 'lit':
+        if (chargePressed) {
+          player.molotovState = 'charging';
+          player.molotovChargeStart = performance.now();
+          player.molotovCharge = 0;
+        } else if (!chargePressed) {
+          // Cancel if no charge input
+          player.molotovState = 'cooldown';
+          player.molotovCooldown = 0.5;
+        }
+        break;
+        
+      case 'charging':
+        if (chargePressed) {
+          // Update charge
+          const chargeTime = performance.now() - player.molotovChargeStart;
+          player.molotovCharge = Math.min(1, chargeTime / MOLOTOV_CONFIG.maxChargeTime);
+        } else {
+          // Released - throw molotov
+          throwMolotov();
+          player.molotovState = 'cooldown';
+          player.molotovCooldown = 1.0;
+        }
+        break;
+        
+      case 'cooldown':
+        if (player.molotovCooldown <= 0) {
+          player.molotovState = 'inactive';
+        }
+        break;
+    }
+  }
+
+  function throwMolotov() {
+    if (player.molotovCount <= 0) return;
+    
+    player.molotovCount--;
+    
+    // Calculate throw velocity based on charge
+    const force = MOLOTOV_CONFIG.minForce + (MOLOTOV_CONFIG.maxForce - MOLOTOV_CONFIG.minForce) * player.molotovCharge;
+    const angle = -Math.PI / 4; // 45 degrees up
+    const vx = Math.cos(angle) * force * player.dir;
+    const vy = Math.sin(angle) * force;
+    
+    // Spawn position
+    const throwX = player.dir === 1 ? player.x + 16 : player.x - 4;
+    const throwY = player.y + 8;
+    
+    // Create molotov projectile
+    molotovProjectiles.push({
+      x: throwX,
+      y: throwY,
+      vx: vx,
+      vy: vy,
+      rotation: 0,
+      rotationSpeed: MOLOTOV_CONFIG.spinSpeed * (Math.random() > 0.5 ? 1 : -1),
+      life: 5.0, // max flight time
+      active: true
+    });
+    
+    player.molotovCharge = 0;
+  }
+
+  function calculateTrajectoryPreview() {
+    if (player.molotovState !== 'charging') return [];
+    
+    const force = MOLOTOV_CONFIG.minForce + (MOLOTOV_CONFIG.maxForce - MOLOTOV_CONFIG.minForce) * player.molotovCharge;
+    const angle = -Math.PI / 4;
+    const vx = Math.cos(angle) * force * player.dir;
+    const vy = Math.sin(angle) * force;
+    
+    const startX = player.dir === 1 ? player.x + 16 : player.x - 4;
+    const startY = player.y + 8;
+    
+    const points = [];
+    const dt = 1/30; // 30fps simulation
+    let x = startX, y = startY;
+    let vxSim = vx, vySim = vy;
+    
+    for (let i = 0; i < MOLOTOV_CONFIG.arcSteps; i++) {
+      points.push({ x, y });
+      
+      // Simulate physics
+      vySim += MOLOTOV_CONFIG.gravity * dt;
+      x += vxSim * dt;
+      y += vySim * dt;
+      
+      // Stop if hit ground
+      if (y >= GROUND_Y) break;
+    }
+    
+    return points;
+  }
+
+  function updateMolotovProjectiles(dt, t) {
+    for (let i = molotovProjectiles.length - 1; i >= 0; i--) {
+      const m = molotovProjectiles[i];
+      if (!m.active) continue;
+      
+      // Apply gravity
+      m.vy += MOLOTOV_CONFIG.gravity * dt;
+      
+      // Update position
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      
+      // Update rotation
+      m.rotation += m.rotationSpeed * dt;
+      
+      // Check collisions
+      let hit = false;
+      let hitNPC = null;
+      
+      // Ground collision
+      if (m.y >= GROUND_Y - 4) {
+        hit = true;
+      }
+      
+      // NPC collision
+      for (const g of goons) {
+        if (!g.alive || g.state === 'dead') continue;
+        const gBox = { x: g.x, y: g.y, w: 16, h: 16 };
+        const mBox = { x: m.x - 2, y: m.y - 2, w: 4, h: 4 };
+        if (aabb(gBox, mBox)) {
+          hit = true;
+          hitNPC = g;
+          break;
+        }
+      }
+      
+      // NPC collision (civilians)
+      for (const n of npcs) {
+        if (n.state === 'down') continue;
+        const nBox = { x: n.x, y: n.y, w: 16, h: 16 };
+        const mBox = { x: m.x - 2, y: m.y - 2, w: 4, h: 4 };
+        if (aabb(nBox, mBox)) {
+          hit = true;
+          hitNPC = n;
+          break;
+        }
+      }
+      
+      // Remove if out of bounds or lifetime expired
+      if (m.x < -50 || m.x > WORLD_W + 50 || m.life <= 0) {
+        molotovProjectiles.splice(i, 1);
+        continue;
+      }
+      
+      m.life -= dt;
+      
+      if (hit) {
+        // Shatter molotov
+        shatterMolotov(m.x, m.y, hitNPC);
+        molotovProjectiles.splice(i, 1);
+      }
+    }
+  }
+  
+  function shatterMolotov(x, y, hitNPC = null) {
+    // Create fire patch
+    firePatches.push({
+      x: x,
+      y: Math.max(y, GROUND_Y - 10), // Clamp to near ground
+      radius: MOLOTOV_CONFIG.fireRadiusStart,
+      maxRadius: MOLOTOV_CONFIG.fireRadiusStart,
+      minRadius: MOLOTOV_CONFIG.fireRadiusEnd,
+      life: MOLOTOV_CONFIG.fireLifetime / 1000, // Convert to seconds
+      maxLife: MOLOTOV_CONFIG.fireLifetime / 1000,
+      lastDamageTick: performance.now(),
+      active: true
+    });
+    
+    // Apply direct hit damage and burning status
+    if (hitNPC) {
+      applyBurningStatus(hitNPC);
+      // Apply direct hit bonus damage
+      if (hitNPC.hp !== undefined) {
+        hitNPC.hp = Math.max(0, hitNPC.hp - MOLOTOV_CONFIG.directHitBonus);
+        if (hitNPC.hp <= 0) {
+          hitNPC.alive = false;
+          hitNPC.state = 'dying';
+        }
+      }
+    }
+    
+    // Particle effects for shatter
+    for (let i = 0; i < 8; i++) {
+      particles.push({
+        type: 'glass',
+        x: x,
+        y: y,
+        vx: (rng() - 0.5) * 60,
+        vy: -rng() * 40,
+        life: 0.5 + rng() * 0.3
+      });
+    }
+    
+    // Screen shake
+    screenShake = Math.min(4, screenShake + 1.5);
+  }
+  
+  function updateFirePatches(dt, t) {
+    for (let i = firePatches.length - 1; i >= 0; i--) {
+      const f = firePatches[i];
+      if (!f.active) continue;
+      
+      f.life -= dt;
+      
+      // Update radius (shrink over time)
+      const lifeRatio = f.life / f.maxLife;
+      f.radius = f.minRadius + (f.maxRadius - f.minRadius) * lifeRatio;
+      
+      // Damage tick
+      const now = performance.now();
+      if (now - f.lastDamageTick >= MOLOTOV_CONFIG.fireTickInterval) {
+        f.lastDamageTick = now;
+        
+        // Damage entities in radius
+        for (const g of goons) {
+          if (!g.alive || g.state === 'dead') continue;
+          const dist = Math.sqrt((g.x + 8 - f.x) ** 2 + (g.y + 8 - f.y) ** 2);
+          if (dist <= f.radius) {
+            applyBurningStatus(g);
+            // Apply fire damage
+            if (g.hp !== undefined) {
+              g.hp = Math.max(0, g.hp - 1);
+              if (g.hp <= 0) {
+                g.alive = false;
+                g.state = 'dying';
+              }
+            }
+          }
+        }
+        
+        // Damage NPCs
+        for (const n of npcs) {
+          if (n.state === 'down') continue;
+          const dist = Math.sqrt((n.x + 8 - f.x) ** 2 + (n.y + 8 - f.y) ** 2);
+          if (dist <= f.radius) {
+            applyBurningStatus(n);
+          }
+        }
+      }
+      
+      // Remove expired fire patches
+      if (f.life <= 0) {
+        firePatches.splice(i, 1);
+      }
+    }
+  }
+  
+  function applyBurningStatus(entity) {
+    if (!entity.burning) {
+      entity.burning = {
+        duration: MOLOTOV_CONFIG.burnDuration / 1000, // Convert to seconds
+        maxDuration: MOLOTOV_CONFIG.burnDuration / 1000,
+        originalState: entity.state,
+        lastPanicChange: performance.now()
+      };
+      // Set burning behavior
+      if (entity.state !== 'wounded' && entity.state !== 'dying' && entity.state !== 'dead') {
+        entity.state = 'burning';
+      }
+    } else {
+      // Refresh burning duration
+      entity.burning.duration = entity.burning.maxDuration;
+    }
+  }
+
   function update(dt, t) {
     // Input
   let left = keys.has('arrowleft') || keys.has('a');
@@ -812,6 +1130,15 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
   let shoot = pressed.has(' ');
   let interact = pressed.has('e');
   let toggleJournal = pressed.has('j');
+  
+  // Molotov input
+  let molotovEquip = pressed.has('q');
+  let molotovCharge = keys.has(' '); // Space for charge (when in molotov mode)
+  
+  // Prevent shooting when molotov is equipped
+  if (player.molotovState !== 'inactive') {
+    shoot = false; // Override shoot when molotov is active
+  }
 
     // Boss intro cutscene trigger & control lock
     // Conditions to start: boss exists, intro not done, not already active, and booth is visible in viewport
@@ -978,6 +1305,9 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
       if (player.twirlCooldown < 1.2) player.twirlCooldown = 1.2;
     }
 
+  // Molotov Cocktail Controller
+  updateMolotovController(dt, t, molotovEquip, molotovCharge);
+
   // Fire
     if (player.fireCooldown > 0) player.fireCooldown -= dt;
     if (shoot && player.fireCooldown <= 0) {
@@ -1113,6 +1443,12 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
         }
       }
     }
+
+    // Update molotov projectiles
+    updateMolotovProjectiles(dt, t);
+    
+    // Update fire patches
+    updateFirePatches(dt, t);
 
     // Update particles and dialogue
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -1413,6 +1749,29 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
 
       g.phase += dt * 0.5;
 
+      // Update burning status
+      if (g.burning) {
+        g.burning.duration -= dt;
+        if (g.burning.duration <= 0) {
+          // Burning ended, restore original state
+          delete g.burning;
+          if (g.state === 'burning') {
+            g.state = g.burning?.originalState || 'smoke_hold';
+          }
+        } else {
+          // Continue burning behavior - erratic movement
+          const now = performance.now();
+          if (now - g.burning.lastPanicChange > 800) {
+            g.burning.lastPanicChange = now;
+            // Random panic direction
+            g.dir = Math.random() > 0.5 ? 1 : -1;
+            // Move erratically
+            g.x += (Math.random() - 0.5) * 20;
+            g.x = Math.max(0, Math.min(WORLD_W - 16, g.x));
+          }
+        }
+      }
+
       // Smoking state machine loop
       if (g.state.startsWith('smoke')) {
         const p = g.phase % 4;
@@ -1508,6 +1867,30 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
     // NPC behavior + idles
     for (const n of npcs) {
       n.panicTimer = (n.panicTimer || 0);
+      
+      // Update burning status
+      if (n.burning) {
+        n.burning.duration -= dt;
+        if (n.burning.duration <= 0) {
+          // Burning ended, restore original state
+          delete n.burning;
+          if (n.state === 'burning') {
+            n.state = n.burning?.originalState || 'idle';
+          }
+        } else {
+          // Continue burning behavior - panic movement
+          const now = performance.now();
+          if (now - n.burning.lastPanicChange > 600) {
+            n.burning.lastPanicChange = now;
+            // Random panic direction
+            n.dir = Math.random() > 0.5 ? 1 : -1;
+            // Move erratically
+            n.x += (Math.random() - 0.5) * 25;
+            n.x = Math.max(0, Math.min(WORLD_W - 16, n.x));
+          }
+        }
+      }
+      
       // Dying animation progression
       if (n.state === 'dying') {
         n.deathT = (n.deathT || 0) + dt * 1.4;
@@ -1743,6 +2126,8 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
     player.x = 40; player.y = 120; player.dir = 1; player.fireCooldown = 0; player.anim = 0; player.aiming=false; playerIframes = 0; cameraX = 0;
     player.alive = true; player.hp = player.maxHp;
   bullets.length = 0; enemyBullets.length = 0; bossBullets.length = 0; particles.length = 0;
+  molotovProjectiles.length = 0; firePatches.length = 0;
+  player.molotovCount = MOLOTOV_CONFIG.inventoryStart; player.molotovState = 'inactive'; player.molotovCharge = 0; player.molotovCooldown = 0;
   dialogue.current = null; dialogue.queue.length = 0;
     boss = null; bossArena = null; bossFightActive = false; victory = false;
     bossCutscene.active = false; bossCutscene.phase = 'idle'; bossCutscene.timer = 0; bossCutscene.lockLeftX = 0; bossCutscene.exitTargetX = 0;
@@ -1773,6 +2158,43 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
   }
 
   drawBackground(t);
+
+  // Fire patches
+  for (const f of firePatches) {
+    if (!f.active) continue;
+    
+    const fx = f.x - cameraX;
+    const fy = f.y;
+    
+    // Draw fire as flickering circles with gradient
+    const numFlames = Math.max(3, Math.floor(f.radius / 15));
+    for (let i = 0; i < numFlames; i++) {
+      const angle = (i / numFlames) * Math.PI * 2 + t * 2;
+      const offsetX = Math.cos(angle) * (f.radius * 0.6) * (0.7 + Math.sin(t * 3 + i) * 0.3);
+      const offsetY = Math.sin(angle) * (f.radius * 0.4) * (0.7 + Math.cos(t * 4 + i) * 0.3);
+      
+      const flameX = fx + offsetX;
+      const flameY = fy + offsetY;
+      
+      // Flickering size and opacity
+      const flicker = 0.8 + 0.2 * Math.sin(t * 8 + i * 2);
+      const size = (3 + Math.sin(t * 6 + i) * 2) * flicker;
+      
+      ctx.globalAlpha = 0.8 * flicker * (f.life / f.maxLife);
+      
+      // Gradient fire colors
+      const gradient = ctx.createRadialGradient(flameX, flameY, 0, flameX, flameY, size);
+      gradient.addColorStop(0, '#ffff00'); // bright yellow center
+      gradient.addColorStop(0.4, '#ff7700'); // orange
+      gradient.addColorStop(1, '#ff0000'); // red edge
+      
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(flameX, flameY, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
 
   // Particles behind
     for (const p of particles) {
@@ -1847,6 +2269,37 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
       if (g.state === 'wounded' && g.screamTimer > 0 && !dialogueActive()) {
         drawSpeechBubble(ctx, 'HELP!', g.x - cameraX + 2, g.y - 2, 1, { speaker: 'npc', maxWidth: VW - 16 });
       }
+      
+      // Burning visual effects
+      if (g.burning) {
+        const gx = g.x - cameraX;
+        const gy = g.y;
+        
+        // Flame overlay on entity
+        const numFlames = 3;
+        for (let i = 0; i < numFlames; i++) {
+          const flameOffset = (i / numFlames) * Math.PI * 2 + t * 4;
+          const fx = gx + 8 + Math.cos(flameOffset) * 6;
+          const fy = gy + 4 + Math.sin(flameOffset) * 4 - Math.abs(Math.sin(t * 6 + i)) * 3;
+          
+          const flicker = 0.6 + 0.4 * Math.sin(t * 12 + i * 2);
+          ctx.globalAlpha = flicker * 0.8;
+          ctx.fillStyle = i % 2 === 0 ? '#ff6600' : '#ffaa00';
+          
+          ctx.beginPath();
+          ctx.arc(fx, fy, 1 + Math.sin(t * 8 + i), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        
+        // Red tint on entity
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = 0.3;
+        ctx.fillStyle = '#ff4444';
+        ctx.fillRect(gx, gy, 16, 16);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+      }
     }
 
     // Boss: render only when not hidden
@@ -1863,6 +2316,29 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
   const breathPhase = (player.breathT % BREATH_PERIOD) / BREATH_PERIOD; // 0..1
   // Expose to goon overlay
   drawGoon._wind = windSway;
+  
+  // Trajectory preview (while charging molotov)
+  if (player.molotovState === 'charging') {
+    const trajectoryPoints = calculateTrajectoryPreview();
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = '#ffff00'; // bright yellow dots
+    for (let i = 0; i < trajectoryPoints.length; i++) {
+      const point = trajectoryPoints[i];
+      const px = point.x - cameraX;
+      const py = point.y;
+      
+      // Make dots fade out along the trajectory
+      const alpha = 0.8 - (i / trajectoryPoints.length) * 0.6;
+      ctx.globalAlpha = alpha;
+      
+      // Draw small dot
+      ctx.beginPath();
+      ctx.arc(px, py, 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  
   drawPlayer(ctx, Math.round(player.x - cameraX), Math.round(player.y), 1, player.dir, player.anim, player.aiming, {
     crouch: player.crouch,
     jumping: !player.onGround,
@@ -1902,6 +2378,34 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
   // Boss bullets distinct
   ctx.fillStyle = '#a82828';
   for (const b of bossBullets) ctx.fillRect(b.x - cameraX, b.y, b.w, b.h);
+  
+  // Molotov projectiles
+  for (const m of molotovProjectiles) {
+    if (!m.active) continue;
+    
+    const mx = m.x - cameraX;
+    const my = m.y;
+    
+    ctx.save();
+    ctx.translate(mx, my);
+    ctx.rotate(m.rotation);
+    
+    // Draw bottle (simple rectangle)
+    ctx.fillStyle = '#2a4a2a'; // dark green bottle
+    ctx.fillRect(-2, -3, 4, 6);
+    
+    // Draw rag/wick (small rectangle on top)
+    ctx.fillStyle = '#f5f5dc'; // beige rag
+    ctx.fillRect(-1, -4, 2, 2);
+    
+    // Draw flame on rag (small flickering dot)
+    const flicker = 0.8 + 0.2 * Math.sin(performance.now() * 0.02);
+    ctx.globalAlpha = flicker;
+    ctx.fillStyle = '#ff6600';
+    ctx.fillRect(0, -4, 1, 1);
+    
+    ctx.restore();
+  }
 
     // Foreground particles (blood)
     for (const p of particles) {
@@ -1914,6 +2418,12 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
         if (p.type === 'spark') {
           ctx.fillStyle = '#ffd37f';
           ctx.fillRect(Math.round(p.x - cameraX), Math.round(p.y), 1, 1);
+        }
+        if (p.type === 'glass') {
+          ctx.globalAlpha = Math.max(0, p.life);
+          ctx.fillStyle = '#e6e6fa'; // light glass color
+          ctx.fillRect(Math.round(p.x - cameraX), Math.round(p.y), 1, 1);
+          ctx.globalAlpha = 1;
         }
     }
 
@@ -1934,6 +2444,37 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
       drawNPC(ctx, Math.round(n.x - cameraX + ox), Math.round(n.y + oy), 1, n.type, n.state, n.dir || 1, npcOpts);
       if (n.state === 'afraid' && Math.floor(t*2)%2===0 && !dialogueActive()) {
         drawSpeechBubble(ctx, 'Don\'t shoot!', n.x - cameraX + 2, n.y - 2, 1, { speaker: 'npc', maxWidth: VW - 16 });
+      }
+      
+      // Burning visual effects
+      if (n.burning) {
+        const nx = n.x - cameraX + ox;
+        const ny = n.y + oy;
+        
+        // Flame overlay on entity
+        const numFlames = 3;
+        for (let i = 0; i < numFlames; i++) {
+          const flameOffset = (i / numFlames) * Math.PI * 2 + t * 4;
+          const fx = nx + 8 + Math.cos(flameOffset) * 6;
+          const fy = ny + 4 + Math.sin(flameOffset) * 4 - Math.abs(Math.sin(t * 6 + i)) * 3;
+          
+          const flicker = 0.6 + 0.4 * Math.sin(t * 12 + i * 2);
+          ctx.globalAlpha = flicker * 0.8;
+          ctx.fillStyle = i % 2 === 0 ? '#ff6600' : '#ffaa00';
+          
+          ctx.beginPath();
+          ctx.arc(fx, fy, 1 + Math.sin(t * 8 + i), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        
+        // Red tint on entity
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = 0.3;
+        ctx.fillStyle = '#ff4444';
+        ctx.fillRect(nx, ny, 16, 16);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
       }
       // kid ball
       if (n._ball) {
@@ -2073,8 +2614,8 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
 
   // UI
   // Energy bar (3 segments) — moved to top-left
+  const bx = 4, by = 4;
     const drawEnergy = () => {
-      const bx = 4, by = 4;
       for (let i = 0; i < player.maxHp; i++) {
         // outline
         ctx.strokeStyle = '#444';
@@ -2087,6 +2628,43 @@ import { COLORS, drawPlayer, drawGoon, drawMuzzleFlash, drawSpeechBubble, drawNP
       }
     };
     drawEnergy();
+
+    // Molotov inventory display
+    if (player.molotovCount > 0 || player.molotovState !== 'inactive') {
+      const molotovX = bx + player.maxHp * 10 + 8; // Right of energy bar
+      const molotovY = by;
+      
+      // Draw molotov icon
+      ctx.fillStyle = '#2a4a2a'; // bottle color
+      ctx.fillRect(molotovX, molotovY, 3, 4);
+      ctx.fillStyle = '#f5f5dc'; // rag color
+      ctx.fillRect(molotovX + 1, molotovY - 1, 1, 2);
+      
+      // Draw count
+      ctx.fillStyle = '#fff';
+      ctx.font = '6px monospace';
+      ctx.fillText(player.molotovCount.toString(), molotovX + 5, molotovY + 3);
+      
+      // State indicator
+      if (player.molotovState === 'charging') {
+        // Show charge bar
+        const chargeW = 16;
+        const chargeH = 2;
+        const chargeX = molotovX;
+        const chargeY = molotovY + 6;
+        
+        ctx.strokeStyle = '#444';
+        ctx.strokeRect(chargeX, chargeY, chargeW, chargeH);
+        
+        const fillW = Math.floor(chargeW * player.molotovCharge);
+        ctx.fillStyle = '#ffaa00';
+        ctx.fillRect(chargeX + 1, chargeY + 1, fillW - 1, chargeH - 2);
+      } else if (player.molotovState === 'preparing' || player.molotovState === 'lit') {
+        // Show "ready" indicator
+        ctx.fillStyle = '#ff6600';
+        ctx.fillRect(molotovX + 1, molotovY - 2, 1, 1);
+      }
+    }
 
     // Item icons next to energy bar (POIs that were picked up)
     const drawItemIcon = (type, x, y) => {
