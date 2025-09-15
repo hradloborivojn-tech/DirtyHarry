@@ -14,6 +14,16 @@ A tiny HTML5 canvas game made of pure JS and custom-drawn pixel art (no external
 - Pause: P
 - Restart: R
 
+### Molotov Cocktail Mechanic
+
+- Equip Molotov: Q (if you have any in inventory)
+- Charge Throw: Hold Space (while molotov is equipped)
+- Release to Throw: Release Space
+- Trajectory Preview: Dotted arc shows while charging
+- Fire burns for ~5 seconds and damages enemies inside
+- Direct hits ignite enemies, causing panic behavior
+- Start with 3 molotovs, inventory shown next to health bar
+
 ## Goal
 
 Enjoy the gritty LA scene. Goons stand around smoking; get close and they'll make snide remarks. If you aim that .44 at them, they get spooked and back away. Fire a shot and nearby goons will try to retaliate. Headshots are lethal and cinematic; arm shots make them clutch the wound, scream for help, and run to cover.
